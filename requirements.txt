@@ -1,0 +1,12 @@
+sqlalchemy
+aiogram
+pydantic
+pydantic-settings
+asyncpg
+alembic
+aiohttp
+pytest
+pytest-asyncio
+testcontainers
+psycopg2-binary
+tomli
