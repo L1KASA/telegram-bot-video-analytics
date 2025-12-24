@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Dict
-
+from datetime import timedelta
 from sqlalchemy import select, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,23 +22,13 @@ class AnalyticsRepository:
             return await self._execute_snapshot_query(query)
 
     def _apply_filters(self, stmt, model, filters: Dict):
-        if "date_from" in filters:
-            d_from = datetime.fromisoformat(filters["date_from"])
-            if model == Video:
-                stmt = stmt.where(model.video_created_at >= d_from)
-            else:
-                stmt = stmt.where(model.created_at >= d_from)
-
-        if "date_to" in filters:
-            d_to = datetime.fromisoformat(filters["date_to"])
-            if model == Video:
-                stmt = stmt.where(model.video_created_at <= d_to)
-            else:
-                stmt = stmt.where(model.created_at <= d_to)
-
+        if "creator_id" in filters:
+            stmt = stmt.where(model.creator_id == filters["creator_id"])
+        if "video_id" in filters and hasattr(model, 'video_id'):
+            stmt = stmt.where(model.video_id == filters["video_id"])
         if "date_single" in filters:
             d_single = datetime.fromisoformat(filters["date_single"])
-            next_day = d_single.replace(day=d_single.day + 1)
+            next_day = d_single + timedelta(days=1)
             if model == Video:
                 stmt = stmt.where(
                     (model.video_created_at >= d_single) &
@@ -49,7 +39,35 @@ class AnalyticsRepository:
                     (model.created_at >= d_single) &
                     (model.created_at < next_day)
                 )
+        elif "date_from" in filters and "date_to" in filters:
+            d_from = datetime.fromisoformat(filters["date_from"])
+            d_to = datetime.fromisoformat(filters["date_to"])
+            d_to_end = d_to + timedelta(days=1) - timedelta(microseconds=1)
 
+            if model == Video:
+                stmt = stmt.where(
+                    (model.video_created_at >= d_from) &
+                    (model.video_created_at <= d_to_end)
+                )
+            else:
+                stmt = stmt.where(
+                    (model.created_at >= d_from) &
+                    (model.created_at <= d_to_end)
+                )
+        elif "date_from" in filters:
+            d_from = datetime.fromisoformat(filters["date_from"])
+            if model == Video:
+                stmt = stmt.where(model.video_created_at >= d_from)
+            else:
+                stmt = stmt.where(model.created_at >= d_from)
+
+        elif "date_to" in filters:
+            d_to = datetime.fromisoformat(filters["date_to"])
+            d_to_end = d_to + timedelta(days=1) - timedelta(microseconds=1)
+            if model == Video:
+                stmt = stmt.where(model.video_created_at <= d_to_end)
+            else:
+                stmt = stmt.where(model.created_at <= d_to_end)
         return stmt
 
     def _apply_metric_filters(self, stmt, metric_col, filters: Dict):
@@ -62,28 +80,26 @@ class AnalyticsRepository:
         return stmt
 
     def _build_aggregation(self, query: AnalyticsQuery, model, metric_col, base_stmt):
+        subquery = base_stmt.subquery()
+        column_name = metric_col.name
+
         if query.aggregations == AggregationType.COUNT:
-            return select(func.count()).select_from(base_stmt.subquery())
-
+            return select(func.count()).select_from(subquery)
         elif query.aggregations == AggregationType.SUM:
-            return select(func.sum(metric_col)).select_from(base_stmt.subquery())
-
+            return select(func.sum(subquery.c[column_name])).select_from(subquery)
         elif query.aggregations == AggregationType.AVG:
-            return select(func.avg(metric_col)).select_from(base_stmt.subquery())
-
+            return select(func.avg(subquery.c[column_name])).select_from(subquery)
         elif query.aggregations == AggregationType.MAX:
-            return select(func.max(metric_col)).select_from(base_stmt.subquery())
-
+            return select(func.max(subquery.c[column_name])).select_from(subquery)
         elif query.aggregations == AggregationType.MIN:
-            return select(func.min(metric_col)).select_from(base_stmt.subquery())
-
+            return select(func.min(subquery.c[column_name])).select_from(subquery)
         elif query.aggregations == AggregationType.DISTINCT:
             if query.metric == MetricType.VIDEO_ID and model == VideoSnapshot:
-                return select(func.count(distinct(model.video_id))).select_from(base_stmt.subquery())
+                return select(func.count(distinct(subquery.c.video_id))).select_from(subquery)
             else:
-                return select(func.count(distinct(metric_col))).select_from(base_stmt.subquery())
+                return select(func.count(distinct(subquery.c[column_name]))).select_from(subquery)
 
-        return select(func.count()).select_from(base_stmt.subquery())
+        return select(func.count()).select_from(subquery)
 
     async def _execute_video_query(self, query: AnalyticsQuery) -> int:
         model = Video
